@@ -32,6 +32,7 @@ export async function loadShaders(shaderPaths) {
         blurVertex: await import('./blur.vert?raw').then(m => m.default),
         blurFragment: await import('./blur.frag?raw').then(m => m.default),
         blendFragment: await import('./blend.frag?raw').then(m => m.default),
-        normalMapFragment: await import('./normalmap.frag?raw').then(m => m.default)
+        normalMapFragment: await import('./normalmap.frag?raw').then(m => m.default),
+        edgeFragment: await import('./edge.frag?raw').then(m => m.default)
     };
 }

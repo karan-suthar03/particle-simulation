@@ -33,7 +33,7 @@ vec3 hash3(vec2 p) {
 }
 
 vec4 sampleNormalMap(vec2 position) {
-    vec2 texCoord = ((position*0.8) + 1.0) * 0.5;
+    vec2 texCoord = (position + 1.0) * 0.5;
 
     return texture(u_normalMap, texCoord);
 }
@@ -60,7 +60,7 @@ float noise(vec2 p) {
 float fbm(vec2 p) {
     float value = 0.0;
     float amplitude = 0.5;
-    float frequency = 1.0;
+    float frequency = 2.0;
     
     for (int i = 0; i < 4; i++) {
         value += amplitude * noise(p * frequency);
@@ -96,10 +96,12 @@ void main() {
         
         if (gradientMagnitude > 0.001) {
             vec2 gradientDirection = packedGradient * 2.0 - 1.0;
+
+            gradientDirection = rotate(gradientDirection, 0.5);
             
             float baseStrength = distanceFieldValue * u_textAttraction;
             
-            float gradientStrength = gradientMagnitude * 4.0;
+            float gradientStrength = gradientMagnitude * 10.0;
             
             float finalStrength = baseStrength  * (1.0 + gradientStrength);
             
@@ -130,7 +132,7 @@ void main() {
     }
 
     float noiseInfluence = 1.0 - u_textAttraction * 0.5;
-    float noiseScale = 1.5 + a_type * 0.3;
+    float noiseScale = 1.5 + (3.0 - a_type) * 0.3;
     float noiseStrength = ((3.0 - a_type) * 2.0) * noiseInfluence;
     float timeOffset = u_time * 0.3;
     

@@ -186,20 +186,87 @@
             color: rgba(255, 255, 255, 0.9);
             white-space: nowrap;
         }
+        
+        .menu-button {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+            z-index: 1001;
+            pointer-events: auto;
+        }
+        
+        .menu-button:hover {
+            background: rgba(0, 0, 0, 0.85);
+            transform: scale(1.05);
+        }
+        
+        .menu-button span {
+            width: 24px;
+            height: 2px;
+            background: white;
+            transition: all 0.3s ease;
+            border-radius: 2px;
+        }
+        
+        .menu-button.active span:nth-child(1) {
+            transform: rotate(45deg) translate(5px, 5px);
+        }
+        
+        .menu-button.active span:nth-child(2) {
+            opacity: 0;
+        }
+        
+        .menu-button.active span:nth-child(3) {
+            transform: rotate(-45deg) translate(6px, -6px);
+        }
+        
+        .controls-container {
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        
+        .controls-container.hidden {
+            opacity: 0;
+            transform: translateY(-20px);
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
     <main>
-        <div class="ui-overlay">
-            <div class="particle-counter">
-                <button class="counter-btn" id="decrease-particles">−</button>
-                <span class="particle-count" id="particle-count">250K</span>
-                <button class="counter-btn" id="increase-particles">+</button>
-            </div>
-        </div>
+        <button class="menu-button active" id="menu-toggle" title="Toggle Options">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
         
-        <div class="ui-overlay" style="top: 80px;">
-            <div class="text-controls">
+        <div class="controls-container" id="controls-container">
+            <div class="ui-overlay">
+                <div class="particle-counter">
+                    <button class="counter-btn" id="decrease-particles">−</button>
+                    <span class="particle-count" id="particle-count">250K</span>
+                    <button class="counter-btn" id="increase-particles">+</button>
+                </div>
+            </div>
+            
+            <div class="ui-overlay" style="top: 80px;">
+                <div class="text-controls">
                 <input type="text" id="text-input" placeholder="Enter text..." value="KARAN" maxlength="10">
                 <button class="update-btn" id="update-text">Update</button>
                 <div class="switch-container">
@@ -216,7 +283,15 @@
                         <span class="slider"></span>
                     </label>
                 </div>
+                <div class="switch-container">
+                    <span class="switch-label">Clock</span>
+                    <label class="switch">
+                        <input type="checkbox" id="clock-toggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
+        </div>
         </div>
         <canvas id="glcanvas"></canvas>
     </main>

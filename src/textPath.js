@@ -17,6 +17,7 @@ export class TextPathGPU {
         this.blurProgram = new Program(gl, shaders.blurVertex, shaders.blurFragment);
         this.blendProgram = new Program(gl, shaders.blurVertex, shaders.blendFragment);
         this.normalMapProgram = new Program(gl, shaders.blurVertex, shaders.normalMapFragment);
+        this.edgeProgram = new Program(gl, shaders.blurVertex, shaders.edgeFragment);
         
         this.setupFramebuffers();
         this.setupQuad();
@@ -86,6 +87,20 @@ export class TextPathGPU {
         
         this.normalMapFramebuffer = new Framebuffer(gl);
         this.normalMapFramebuffer.attachTexture(this.normalMapTexture, gl.COLOR_ATTACHMENT0);
+        this.edgeTexture = new Texture(gl, {
+            width: this.textureSize,
+            height: this.textureSize,
+            internalFormat: gl.RGBA,
+            format: gl.RGBA,
+            type: gl.UNSIGNED_BYTE,
+            minFilter: gl.LINEAR,
+            magFilter: gl.LINEAR,
+            wrapS: gl.CLAMP_TO_EDGE,
+            wrapT: gl.CLAMP_TO_EDGE
+        });
+        
+        this.edgeFramebuffer = new Framebuffer(gl);
+        this.edgeFramebuffer.attachTexture(this.edgeTexture, gl.COLOR_ATTACHMENT0);
     }
 
     setupQuad() {
@@ -125,7 +140,9 @@ export class TextPathGPU {
         
         const baseTexture = this.createBaseTextTexture();
         
-        this.applyBlurLevels(baseTexture);
+        this.applyEdgeDetection(baseTexture);
+        
+        this.applyBlurLevels(this.edgeTexture);
         
         this.blendLevels();
         
@@ -182,6 +199,26 @@ export class TextPathGPU {
         });
         
         return texture;
+    }
+
+    applyEdgeDetection(baseTexture) {
+        const gl = this.gl;
+        
+        this.edgeFramebuffer.bind();
+        gl.viewport(0, 0, this.textureSize, this.textureSize);
+        
+        this.edgeProgram.use();
+        this.quadVAO.bind();
+        gl.disable(gl.BLEND);
+        
+        baseTexture.activate(0);
+        this.edgeProgram.setUniform('u_texture', 0);
+        this.edgeProgram.setUniform('u_texelSize', [1.0 / this.textureSize, 1.0 / this.textureSize]);
+        
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        
+        this.quadVAO.unbind();
+        gl.enable(gl.BLEND);
     }
 
     applyBlurLevels(baseTexture) {
@@ -259,7 +296,7 @@ export class TextPathGPU {
             this.blendProgram.setUniform(`u_level${i + 1}`, i);
         }
         
-        this.blendProgram.setUniform('u_weights', [0.4, 0.3, 0.2, 0.1]);
+        this.blendProgram.setUniform('u_weights', [0.355, 0.75, 1.5, 3]);
         
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         
@@ -298,6 +335,10 @@ export class TextPathGPU {
         return this.normalMapTexture.getTexture();
     }
 
+    getEdgeTexture() {
+        return this.edgeTexture.getTexture();
+    }
+
     getTextureSize() {
         return this.textureSize;
     }
@@ -308,56 +349,60 @@ export class TextPathGPU {
     }
 
     calculateOptimalFontSize(ctx, text) {
-        let fontSize = this.fontSize;
-        const padding = 20;
+        const padding = 30;
         const maxWidth = this.textureSize - padding * 2;
         const maxHeight = this.textureSize - padding * 2;
         
         let minSize = 10;
-        let maxSize = Math.min(this.textureSize / 2, 200);
+        let maxSize = this.textureSize;
+        let fontSize = minSize;
         
-        for (let i = 0; i < 20; i++) {
-            fontSize = (minSize + maxSize) / 2;
-            
-            ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
-            
+        const getTextDimensions = (size) => {
+            ctx.font = `${this.fontWeight} ${size}px ${this.fontFamily}`;
             const metrics = ctx.measureText(text);
-            const textWidth = metrics.width;
-            const textHeight = fontSize;
             
-            if (textWidth <= maxWidth && textHeight <= maxHeight) {
+            let width = metrics.width;
+            let height = size;
+            
+            if (metrics.actualBoundingBoxLeft !== undefined) {
+                width = metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight;
+                height = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+            }
+            
+            return { width, height };
+        };
+        
+        for (let i = 0; i < 30; i++) {
+            fontSize = (minSize + maxSize) / 2;
+            const { width, height } = getTextDimensions(fontSize);
+            
+            const fitsWidth = width <= maxWidth * 0.98;
+            const fitsHeight = height <= maxHeight * 0.98;
+            
+            if (fitsWidth && fitsHeight) {
                 minSize = fontSize;
             } else {
                 maxSize = fontSize;
             }
             
-            if (maxSize - minSize < 1) {
+            if (maxSize - minSize < 0.5) {
                 break;
             }
         }
         
         fontSize = minSize;
         
-        ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
-        const finalMetrics = ctx.measureText(text);
-        const actualWidth = finalMetrics.actualBoundingBoxLeft + finalMetrics.actualBoundingBoxRight;
-        const actualHeight = finalMetrics.actualBoundingBoxAscent + finalMetrics.actualBoundingBoxDescent;
+        let { width, height } = getTextDimensions(fontSize);
         
-        // reduce size if still big
-        // can optimize further
-        while ((actualWidth > maxWidth || actualHeight > maxHeight) && fontSize > 10) {
-            fontSize -= 2;
-            ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
-            const newMetrics = ctx.measureText(text);
-            const newWidth = newMetrics.actualBoundingBoxLeft + newMetrics.actualBoundingBoxRight;
-            const newHeight = newMetrics.actualBoundingBoxAscent + newMetrics.actualBoundingBoxDescent;
-            
-            if (newWidth <= maxWidth && newHeight <= maxHeight) {
-                break;
-            }
+        while ((width > maxWidth || height > maxHeight) && fontSize > 10) {
+            fontSize -= 0.5;
+            const dims = getTextDimensions(fontSize);
+            width = dims.width;
+            height = dims.height;
         }
         
-        return Math.max(fontSize, 10);
+        fontSize = Math.max(fontSize, 10);
+        return fontSize;
     }
 
     cleanup() {
@@ -366,10 +411,12 @@ export class TextPathGPU {
         this.blurTextures.forEach(texture => texture.delete());
         this.resultTexture.delete();
         this.normalMapTexture.delete();
+        this.edgeTexture.delete();
         
         this.framebuffers.forEach(fb => fb.delete());
         this.resultFramebuffer.delete();
         this.normalMapFramebuffer.delete();
+        this.edgeFramebuffer.delete();
         
         this.quadBuffer.delete();
         this.quadVAO.delete();

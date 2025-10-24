@@ -5,34 +5,36 @@ import { TextPathGPU } from './textPath.js';
 let PARTICLE_COUNT = 250000; 
 
 var textSwitch = 1;
-let loopEnabled = true;
+let loopEnabled = true; // Re-enabled simulation loop
 let textEnabled = true;
+let clockEnabled = false; // Clock is initially disabled
 
 let simulationRunning = false;
 let animationId = null;
+let clockIntervalId = null; // Store clock interval ID
 
 function createParticleData(particleCount) {
     const positions = new Float32Array(particleCount * 2);
     const velocities = new Float32Array(particleCount * 2);
     const types = new Float32Array(particleCount);
 
-    
-    const gridSize = Math.ceil(Math.sqrt(particleCount));
-    const spacing = 4.0 / gridSize; 
+    // Helper function for gaussian random distribution (Box-Muller transform)
+    function gaussianRandom(mean = 0, stdDev = 1) {
+        const u1 = Math.random();
+        const u2 = Math.random();
+        const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+        return z0 * stdDev + mean;
+    }
 
     for (let i = 0; i < particleCount; i++) {
-        const gridX = i % gridSize;
-        const gridY = Math.floor(i / gridSize);
-
+        // Use gaussian distribution centered at (0, 0) with standard deviation of 0.5
+        // This concentrates more particles in the middle while still spreading some out
+        const x = gaussianRandom(0, 0.5);
+        const y = gaussianRandom(0, 0.5);
         
-        const baseX = -2.0 + gridX * spacing + spacing * 0.5;
-        const baseY = -2.0 + gridY * spacing + spacing * 0.5;
-        
-        const randomOffsetX = (Math.random() - 0.5) * spacing * 0.8;
-        const randomOffsetY = (Math.random() - 0.5) * spacing * 0.8;
-        
-        positions[i * 2]     = baseX + randomOffsetX;
-        positions[i * 2 + 1] = baseY + randomOffsetY;
+        // Clamp to reasonable bounds to keep particles within view
+        positions[i * 2]     = Math.max(-2.0, Math.min(2.0, x));
+        positions[i * 2 + 1] = Math.max(-2.0, Math.min(2.0, y));
 
         velocities[i * 2] = (Math.random() * 2 - 1) * 0.1;
         velocities[i * 2 + 1] = (Math.random() * 2 - 1) * 0.1;
@@ -42,6 +44,66 @@ function createParticleData(particleCount) {
     }
 
     return { positions, velocities, types };
+}
+
+function openTextureInNewWindow(texture, title) {
+    const gl = texture.gl;
+    const width = texture.width;
+    const height = texture.height;
+    
+    const pixels = new Uint8Array(width * height * 4);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture.texture, 0);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fb);
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    
+    const imageData = ctx.createImageData(width, height);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const srcIdx = (y * width + x) * 4;
+            const dstIdx = ((height - 1 - y) * width + x) * 4; // Flip Y
+            imageData.data[dstIdx + 0] = pixels[srcIdx + 0];
+            imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
+            imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
+            imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
+        }
+    }
+    ctx.putImageData(imageData, 0, 0);
+    
+    const newWindow = window.open('', '_blank', `width=${width * 4},height=${height * 4 + 50}`);
+    if (newWindow) {
+        newWindow.document.title = title;
+        newWindow.document.body.style.margin = '0';
+        newWindow.document.body.style.display = 'flex';
+        newWindow.document.body.style.flexDirection = 'column';
+        newWindow.document.body.style.justifyContent = 'center';
+        newWindow.document.body.style.alignItems = 'center';
+        newWindow.document.body.style.backgroundColor = '#000';
+        
+        const heading = newWindow.document.createElement('h2');
+        heading.textContent = title;
+        heading.style.color = '#fff';
+        heading.style.fontFamily = 'Arial, sans-serif';
+        heading.style.margin = '10px';
+        newWindow.document.body.appendChild(heading);
+        
+        const img = newWindow.document.createElement('img');
+        img.src = canvas.toDataURL();
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '100%';
+        img.style.imageRendering = 'pixelated';
+        newWindow.document.body.appendChild(img);
+        
+    } else {
+        console.error('Failed to open new window.');
+    }
 }
 
 async function start() {
@@ -158,14 +220,15 @@ async function start() {
         blurVertex: './src/shaders/blur.vert',
         blurFragment: './src/shaders/blur.frag',
         blendFragment: './src/shaders/blend.frag',
-        normalMapFragment: './src/shaders/normalmap.frag'
+        normalMapFragment: './src/shaders/normalmap.frag',
+        edgeFragment: './src/shaders/edge.frag'
     });
 
     // multi-level blur distance field
     const textPath = new TextPathGPU(gl, shaders, 'KARAN', {
         fontSize: 100,
         fontWeight: 'bold',
-        textureSize: 128
+        textureSize: 512
     });
     
     const renderProgram = new Program(gl, shaders.vertex, shaders.fragment);
@@ -250,6 +313,10 @@ async function start() {
     buffer2.bindBase(0);
     
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    
+    // openTextureInNewWindow(textPath.edgeTexture, 'Edge Detection');
+    // openTextureInNewWindow(textPath.resultTexture, 'Distance Field');
+    // openTextureInNewWindow(textPath.normalMapTexture, 'Normal Map');
 
     let currentBuffer = 0; 
 
@@ -353,6 +420,31 @@ async function start() {
     animationId = requestAnimationFrame(render);
 }
 
+function startClock() {
+    if (clockIntervalId) {
+        clearInterval(clockIntervalId);
+    }
+    if (clockEnabled) {
+        clockIntervalId = setInterval(() => {
+            let time = Date.now();
+            let hours = new Date(time).getHours();
+            let minutes = new Date(time).getMinutes();
+            let seconds = new Date(time).getSeconds();
+            let formattedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            if (globalUpdateTextPath) {
+                globalUpdateTextPath(formattedTime);
+            }
+        }, 1000);
+    }
+}
+
+function stopClock() {
+    if (clockIntervalId) {
+        clearInterval(clockIntervalId);
+        clockIntervalId = null;
+    }
+}
+
 
 function stopSimulation() {
     simulationRunning = false;
@@ -406,6 +498,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateBtn = document.getElementById('update-text');
     const loopToggle = document.getElementById('loop-toggle');
     const textToggle = document.getElementById('text-toggle');
+    const clockToggle = document.getElementById('clock-toggle');
+    const menuToggle = document.getElementById('menu-toggle');
+    const controlsContainer = document.getElementById('controls-container');
+    
+    let menuOpen = true;
+    if (menuToggle && controlsContainer) {
+        menuToggle.addEventListener('click', () => {
+            menuOpen = !menuOpen;
+            menuToggle.classList.toggle('active', menuOpen);
+            controlsContainer.classList.toggle('hidden', !menuOpen);
+        });
+    }
     
     function updateButtonState() {
         if (updateBtn && textInput) {
@@ -436,6 +540,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (loopToggle) {
                     loopToggle.checked = false;
                 }
+
+                if (!textEnabled) {
+                    textEnabled = true;
+                    if (textToggle) {
+                        textToggle.checked = true;
+                    }
+                }
+                clockEnabled = false;
+                if (clockToggle) {
+                    clockToggle.checked = false;
+                }
+                stopClock();
                 globalUpdateTextPath(newText);
             }
         });
@@ -448,6 +564,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (loopToggle) {
                         loopToggle.checked = false;
                     }
+                    
+                    clockEnabled = false;
+                    if (clockToggle) {
+                        clockToggle.checked = false;
+                    }
+                    stopClock();
                     globalUpdateTextPath(newText);
                 }
             }
@@ -457,12 +579,61 @@ document.addEventListener('DOMContentLoaded', () => {
     if (loopToggle) {
         loopToggle.addEventListener('change', (e) => {
             loopEnabled = e.target.checked;
+            if (loopEnabled) {
+                if (!textEnabled) {
+                    textEnabled = true;
+                    if (textToggle) {
+                        textToggle.checked = true;
+                    }
+                }
+                
+                clockEnabled = false;
+                if (clockToggle) {
+                    clockToggle.checked = false;
+                }
+                stopClock();
+            }
         });
     }
     
     if (textToggle) {
         textToggle.addEventListener('change', (e) => {
             textEnabled = e.target.checked;
+            if (!textEnabled) {
+                loopEnabled = false;
+                clockEnabled = false;
+                if (loopToggle) {
+                    loopToggle.checked = false;
+                }
+                if (clockToggle) {
+                    clockToggle.checked = false;
+                }
+                stopClock();
+            }
+        });
+    }
+    
+    if (clockToggle) {
+        clockToggle.addEventListener('change', (e) => {
+            clockEnabled = e.target.checked;
+            if (clockEnabled) {
+                
+                
+                if (!textEnabled) {
+                    textEnabled = true;
+                    if (textToggle) {
+                        textToggle.checked = true;
+                    }
+                }
+                
+                loopEnabled = false;
+                if (loopToggle) {
+                    loopToggle.checked = false;
+                }
+                startClock();
+            } else {
+                stopClock();
+            }
         });
     }
     

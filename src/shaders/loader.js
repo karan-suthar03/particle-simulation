@@ -28,6 +28,10 @@ export async function loadShaders(shaderPaths) {
         vertex: await import('./triangle.vert?raw').then(m => m.default),
         fragment: await import('./triangle.frag?raw').then(m => m.default),
         computeVertex: await import('./compute.vert?raw').then(m => m.default),
-        computeFragment: await import('./compute.frag?raw').then(m => m.default)
+        computeFragment: await import('./compute.frag?raw').then(m => m.default),
+        blurVertex: await import('./blur.vert?raw').then(m => m.default),
+        blurFragment: await import('./blur.frag?raw').then(m => m.default),
+        blendFragment: await import('./blend.frag?raw').then(m => m.default),
+        normalMapFragment: await import('./normalmap.frag?raw').then(m => m.default)
     };
 }

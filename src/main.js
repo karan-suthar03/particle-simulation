@@ -1,8 +1,12 @@
-import { GLContext, Program, VertexArray } from './webgl/index.js';
+import { GLContext, Program, VertexArray, Buffer } from './webgl/index.js';
 import { loadShaders } from './shaders/loader.js';
+import { TextPathGPU } from './textPath.js';
 
 let PARTICLE_COUNT = 250000; 
 
+var textSwitch = 1;
+let loopEnabled = true;
+let textEnabled = true;
 
 let simulationRunning = false;
 let animationId = null;
@@ -10,7 +14,7 @@ let animationId = null;
 function createParticleData(particleCount) {
     const positions = new Float32Array(particleCount * 2);
     const velocities = new Float32Array(particleCount * 2);
-    const colors = new Float32Array(particleCount * 3);
+    const types = new Float32Array(particleCount);
 
     
     const gridSize = Math.ceil(Math.sqrt(particleCount));
@@ -21,32 +25,23 @@ function createParticleData(particleCount) {
         const gridY = Math.floor(i / gridSize);
 
         
-        positions[i * 2]     = -2.0 + gridX * spacing + spacing * 0.5;
-        positions[i * 2 + 1] = -2.0 + gridY * spacing + spacing * 0.5;
+        const baseX = -2.0 + gridX * spacing + spacing * 0.5;
+        const baseY = -2.0 + gridY * spacing + spacing * 0.5;
+        
+        const randomOffsetX = (Math.random() - 0.5) * spacing * 0.8;
+        const randomOffsetY = (Math.random() - 0.5) * spacing * 0.8;
+        
+        positions[i * 2]     = baseX + randomOffsetX;
+        positions[i * 2 + 1] = baseY + randomOffsetY;
 
-        velocities[i * 2] = (Math.random() * 2 - 1)*0.001 ;
-        velocities[i * 2 + 1] = (Math.random() * 2 - 1)*0.001;
+        velocities[i * 2] = (Math.random() * 2 - 1) * 0.1;
+        velocities[i * 2 + 1] = (Math.random() * 2 - 1) * 0.1;
 
         
-        
-
-        colors[i * 3] = Math.random();
-        colors[i * 3 + 1] = Math.random();
-        colors[i * 3 + 2] = Math.random();
+        types[i] = Math.floor(Math.random() * 3); // Random type 0, 1, or 2
     }
 
-    return { positions, velocities, colors };
-}
-
-function createBuffer(gl, data, usage = gl.STATIC_DRAW) {
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, usage);
-    return buffer;
-}
-
-function createTransformFeedback(gl) {
-    return gl.createTransformFeedback();
+    return { positions, velocities, types };
 }
 
 async function start() {
@@ -56,16 +51,26 @@ async function start() {
         return;
     }
 
-    
     let mouseX = 10.0; 
     let mouseY = 10.0; 
     let mouseInitialized = false;
 
     function updatePosition(clientX, clientY) {
         const rect = canvas.getBoundingClientRect();
+        const aspectRatio = canvas.width / canvas.height;
         
-        mouseX = ((clientX - rect.left) / rect.width) * 2 - 1;
-        mouseY = -(((clientY - rect.top) / rect.height) * 2 - 1); 
+        let mx = ((clientX - rect.left) / rect.width) * 2 - 1;
+        let my = -(((clientY - rect.top) / rect.height) * 2 - 1);
+        const scale = Math.min(1.0, 1.0 / aspectRatio);
+        if (aspectRatio > 1.0) {
+            mx /= scale;
+        } else {
+            my /= aspectRatio;
+        }
+        
+        mouseX = mx;
+        mouseY = my;
+        
         mouseInitialized = true;
     }
 
@@ -122,9 +127,14 @@ async function start() {
     function resizeCanvas() {
         const width = window.innerWidth;
         const height = window.innerHeight;
-        canvas.width = width;
-        canvas.height = height;
-        glContext.resize(width, height);
+        const pixelRatio = window.devicePixelRatio || 1;
+        
+        canvas.width = width * pixelRatio;
+        canvas.height = height * pixelRatio;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        
+        glContext.resize(width * pixelRatio, height * pixelRatio);
     }
 
     
@@ -134,43 +144,71 @@ async function start() {
     const gl = glContext.getContext();
     glContext.setDepthTest(false);
     glContext.setClearColor(0.0, 0.0, 0.0, 1.0);
+    
+    // Enable blending for particle overlaps
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_COLOR);
 
     
     const shaders = await loadShaders({
         vertex: './src/shaders/triangle.vert',
         fragment: './src/shaders/triangle.frag',
         computeVertex: './src/shaders/compute.vert',
-        computeFragment: './src/shaders/compute.frag'
+        computeFragment: './src/shaders/compute.frag',
+        blurVertex: './src/shaders/blur.vert',
+        blurFragment: './src/shaders/blur.frag',
+        blendFragment: './src/shaders/blend.frag',
+        normalMapFragment: './src/shaders/normalmap.frag'
     });
 
+    // multi-level blur distance field
+    const textPath = new TextPathGPU(gl, shaders, 'KARAN', {
+        fontSize: 100,
+        fontWeight: 'bold',
+        textureSize: 128
+    });
     
     const renderProgram = new Program(gl, shaders.vertex, shaders.fragment);
 
     
     const computeProgram = new Program(gl, shaders.computeVertex, shaders.computeFragment, {
-        transformFeedbackVaryings: ['v_newPosition', 'v_newVelocity', 'v_newColor']
+        transformFeedbackVaryings: ['v_newPosition', 'v_newVelocity', 'v_newType']
     });
 
-    const { positions, velocities, colors } = createParticleData(PARTICLE_COUNT);
+    let normalMapTexture = textPath.getNormalMapTexture();
     
+    console.log(`GPU text distance field created: ${textPath.getTextureSize()}x${textPath.getTextureSize()}`);
+
+    function updateTextPath(newText) {
+        if (newText.trim() === '') return;
+        
+        textPath.updateText(newText.toUpperCase());
+        normalMapTexture = textPath.getNormalMapTexture();
+    }
+    globalUpdateTextPath = updateTextPath;
+
+    const { positions, velocities, types } = createParticleData(PARTICLE_COUNT);
     
-    const buffer1 = createBuffer(gl, new Float32Array(PARTICLE_COUNT * 7), gl.DYNAMIC_DRAW); 
-    const buffer2 = createBuffer(gl, new Float32Array(PARTICLE_COUNT * 7), gl.DYNAMIC_DRAW);
+    const buffer1 = new Buffer(gl, {
+        data: new Float32Array(PARTICLE_COUNT * 5),
+        usage: gl.DYNAMIC_DRAW
+    });
+    const buffer2 = new Buffer(gl, {
+        data: new Float32Array(PARTICLE_COUNT * 5),
+        usage: gl.DYNAMIC_DRAW
+    });
     
-    
-    const initialData = new Float32Array(PARTICLE_COUNT * 7);
+    // Initialize particle data
+    const initialData = new Float32Array(PARTICLE_COUNT * 5);
     for (let i = 0; i < PARTICLE_COUNT; i++) {
-        initialData[i * 7 + 0] = positions[i * 2 + 0];     
-        initialData[i * 7 + 1] = positions[i * 2 + 1];     
-        initialData[i * 7 + 2] = velocities[i * 2 + 0];    
-        initialData[i * 7 + 3] = velocities[i * 2 + 1];    
-        initialData[i * 7 + 4] = colors[i * 3 + 0];        
-        initialData[i * 7 + 5] = colors[i * 3 + 1];        
-        initialData[i * 7 + 6] = colors[i * 3 + 2];        
+        initialData[i * 5 + 0] = positions[i * 2 + 0];     
+        initialData[i * 5 + 1] = positions[i * 2 + 1];     
+        initialData[i * 5 + 2] = velocities[i * 2 + 0];    
+        initialData[i * 5 + 3] = velocities[i * 2 + 1];    
+        initialData[i * 5 + 4] = types[i];        
     }
     
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer1);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, initialData);
+    buffer1.updateData(initialData);
 
     
     const renderVAO1 = new VertexArray(gl);
@@ -179,19 +217,19 @@ async function start() {
     const computeVAO2 = new VertexArray(gl);
     
     function setupVAO(vao, buffer, program) {
-        const stride = 7 * 4; 
+        const stride = 5 * 4; 
         const posLoc = program.getAttributeLocation('a_position');
         const velLoc = program.getAttributeLocation('a_velocity');
-        const colorLoc = program.getAttributeLocation('a_color');
+        const typeLoc = program.getAttributeLocation('a_type');
         
         if (posLoc !== -1) {
-            vao.addAttributeWithStride(posLoc, buffer, 2, stride, 0);
+            vao.addAttributeWithStride(posLoc, buffer.getBuffer(), 2, stride, 0);
         }
         if (velLoc !== -1) {
-            vao.addAttributeWithStride(velLoc, buffer, 2, stride, 8);
+            vao.addAttributeWithStride(velLoc, buffer.getBuffer(), 2, stride, 8);
         }
-        if (colorLoc !== -1) {
-            vao.addAttributeWithStride(colorLoc, buffer, 3, stride, 16);
+        if (typeLoc !== -1) {
+            vao.addAttributeWithStride(typeLoc, buffer.getBuffer(), 1, stride, 16);
         }
     }
 
@@ -200,18 +238,16 @@ async function start() {
     setupVAO(computeVAO1, buffer1, computeProgram);
     setupVAO(computeVAO2, buffer2, computeProgram);
 
-    
-    const tf1 = createTransformFeedback(gl);
-    const tf2 = createTransformFeedback(gl);
+    // Create transform feedbacks
+    const tf1 = gl.createTransformFeedback();
+    const tf2 = gl.createTransformFeedback();
 
-    
-    
+    // Bind buffers to transform feedback
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tf1);
-    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, buffer1);
-    
+    buffer1.bindBase(0);
     
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tf2);
-    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, buffer2);
+    buffer2.bindBase(0);
     
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
@@ -221,7 +257,8 @@ async function start() {
     let frameCount = 0;
     let lastFpsTime = 0;
     let lastTime = 0;
-
+    let names = ['KARAN', 'WEBGL2'];
+    let index = 0;
     function render(time) {
         if (!startTime) {
             startTime = time;
@@ -233,21 +270,32 @@ async function start() {
 
         frameCount += 1;
         const timeSinceLastFps = time - lastFpsTime;
-        if (timeSinceLastFps >= 1000) {
+        if (timeSinceLastFps >= 2000) {
             const fps = (frameCount * 1000) / timeSinceLastFps;
             console.log(`FPS: ${fps.toFixed(1)}`);
             frameCount = 0;
             lastFpsTime = time;
+            
+            if (loopEnabled) {
+                globalUpdateTextPath(names[index]);
+                index = (index + 1) % names.length;
+            }
         }
 
         const deltaTime = (time - lastTime) * 0.001;
         lastTime = time;
-
+        
+        const aspectRatio = canvas.width / canvas.height;
         
         computeProgram.use();
         computeProgram.setUniform('u_deltaTime', Math.min(deltaTime, 0.016)); 
-        computeProgram.setUniform('u_time', (time - startTime) * 0.001); 
+        computeProgram.setUniform('u_time', (time - startTime) * 0.001);
         
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, normalMapTexture);
+        computeProgram.setUniform('u_normalMap', 0);
+        
+        computeProgram.setUniform('u_textAttraction', textEnabled ? textSwitch : 0);
         
         if (mouseInitialized) {
             computeProgram.setUniform('u_mouse', [mouseX, mouseY]);
@@ -281,10 +329,13 @@ async function start() {
         
         gl.disable(gl.RASTERIZER_DISCARD);
 
+        gl.viewport(0, 0, canvas.width, canvas.height);
         
         glContext.clear();
         renderProgram.use();
-        renderProgram.setUniform('u_pointSize', 1.5); 
+        renderProgram.setUniform('u_pointSize', 1.5);
+        
+        renderProgram.setUniform('u_aspectRatio', aspectRatio);
         
         
         const renderVAO = currentBuffer === 0 ? renderVAO2 : renderVAO1;
@@ -345,10 +396,25 @@ function changeParticleCount(delta) {
     restartSimulation(); 
 }
 
+let globalUpdateTextPath = null;
+
 document.addEventListener('DOMContentLoaded', () => {
     
     const decreaseBtn = document.getElementById('decrease-particles');
     const increaseBtn = document.getElementById('increase-particles');
+    const textInput = document.getElementById('text-input');
+    const updateBtn = document.getElementById('update-text');
+    const loopToggle = document.getElementById('loop-toggle');
+    const textToggle = document.getElementById('text-toggle');
+    
+    function updateButtonState() {
+        if (updateBtn && textInput) {
+            const text = textInput.value.trim();
+            updateBtn.disabled = text.length < 3;
+        }
+    }
+    
+    updateButtonState();
     
     if (decreaseBtn) {
         decreaseBtn.addEventListener('click', () => changeParticleCount(-1));
@@ -358,9 +424,49 @@ document.addEventListener('DOMContentLoaded', () => {
         increaseBtn.addEventListener('click', () => changeParticleCount(1));
     }
     
+    if (textInput) {
+        textInput.addEventListener('input', updateButtonState);
+    }
+    
+    if (updateBtn && textInput) {
+        updateBtn.addEventListener('click', () => {
+            const newText = textInput.value.trim();
+            if (newText && newText.length >= 3 && globalUpdateTextPath) {
+                loopEnabled = false;
+                if (loopToggle) {
+                    loopToggle.checked = false;
+                }
+                globalUpdateTextPath(newText);
+            }
+        });
+        
+        textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const newText = textInput.value.trim();
+                if (newText && newText.length >= 3 && globalUpdateTextPath) {
+                    loopEnabled = false;
+                    if (loopToggle) {
+                        loopToggle.checked = false;
+                    }
+                    globalUpdateTextPath(newText);
+                }
+            }
+        });
+    }
+    
+    if (loopToggle) {
+        loopToggle.addEventListener('change', (e) => {
+            loopEnabled = e.target.checked;
+        });
+    }
+    
+    if (textToggle) {
+        textToggle.addEventListener('change', (e) => {
+            textEnabled = e.target.checked;
+        });
+    }
     
     updateParticleCountDisplay();
-    
     
     start().catch((error) => {
         console.error('Failed to start GPU particle demo:', error);

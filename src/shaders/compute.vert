@@ -6,7 +6,6 @@ in vec2 a_velocity;
 in float a_type;
 
 uniform float u_deltaTime;
-uniform vec2 u_mouse;
 uniform float u_time;
 
 uniform sampler2D u_normalMap;
@@ -60,7 +59,7 @@ float noise(vec2 p) {
 float fbm(vec2 p) {
     float value = 0.0;
     float amplitude = 0.5;
-    float frequency = 2.0;
+    float frequency = 0.0;
     
     for (int i = 0; i < 4; i++) {
         value += amplitude * noise(p * frequency);
@@ -115,33 +114,18 @@ void main() {
             acceleration += randomOffset;
         }
     }
-    float distToMouse = distance(position, u_mouse);
-    
-    if (distToMouse > 0.001 && distToMouse < 100.5) {
-        vec2 dirToMouse = normalize(u_mouse - position);
-        
-        float rotationDirection = mod(a_type, 2.0) == 0.0 ? 1.0 : -1.0;
-        float rotationAngle = rotationDirection * (0.05 + a_type * 0.02);
-        dirToMouse = rotate(dirToMouse, rotationAngle);
-        
-        float longRangeForce = distToMouse * 0.5 * (a_type + 1.0);
-        float shortRangeForce = 0.1 / (distToMouse * distToMouse + 0.1);
-        float forceStrength = (longRangeForce + shortRangeForce * (0.5 - a_type * 0.5));
-        
-        acceleration += dirToMouse * forceStrength;
-    }
 
     float noiseInfluence = 1.0 - u_textAttraction * 0.5;
     float noiseScale = 1.5 + (3.0 - a_type) * 0.3;
     float noiseStrength = ((3.0 - a_type) * 2.0) * noiseInfluence;
     float timeOffset = u_time * 0.3;
     
-    vec2 noiseForce = vec2(
-        fbm(position * noiseScale + vec2(timeOffset, a_type * 100.0)) - 0.5,
-        fbm(position * noiseScale + vec2(a_type * 100.0, timeOffset + 100.0)) - 0.5
-    ) * noiseStrength;
+    // vec2 noiseForce = vec2(
+    //     fbm(position * noiseScale + vec2(timeOffset, a_type * 100.0)) - 0.5,
+    //     fbm(position * noiseScale + vec2(a_type * 100.0, timeOffset + 100.0)) - 0.5
+    // ) * noiseStrength;
     
-    acceleration += noiseForce;
+    // acceleration += noiseForce;
 
     velocity += acceleration * u_deltaTime;
     
@@ -156,16 +140,6 @@ void main() {
     velocity = capVelocity(velocity, (0.1 * (a_type))+0.9);
     
     vec2 newPosition = position + velocity * u_deltaTime;
-
-    float boundaryRadius = 2.2;
-    float distFromCenter = length(newPosition);
-    
-    if (distFromCenter > boundaryRadius && !(distToMouse > 0.001 && distToMouse < 100.5)) {
-        vec2 dirFromCenter = normalize(newPosition);
-        newPosition = -dirFromCenter * boundaryRadius;
-        
-        // velocity *= 0.8;
-    }
 
     v_newPosition = newPosition;
     v_newVelocity = velocity;

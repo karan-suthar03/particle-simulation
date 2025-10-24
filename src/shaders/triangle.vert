@@ -9,23 +9,13 @@ uniform float u_pointSize;
 uniform float u_aspectRatio;
 
 out vec3 v_color;
-out vec2 v_position;
 
 void main() {
     vec2 correctedPosition = a_position;
-    
-    float scale = min(1.0, 1.0 / u_aspectRatio);
-    if (u_aspectRatio > 1.0) {
-        correctedPosition.x *= scale;
-    } else {
-        correctedPosition.y *= u_aspectRatio;
-    }
+    correctedPosition.x /= u_aspectRatio;
     
     gl_Position = vec4(correctedPosition, 0.0, 1.0);
     gl_PointSize = u_pointSize;
-    
-    // Pass original position for fade-out calculation
-    v_position = a_position;
     
     if (a_type < 1.0) {
         v_color = vec3(1.0, 0.2, 0.2); // Red for type 0

@@ -257,7 +257,7 @@ async function start() {
     let frameCount = 0;
     let lastFpsTime = 0;
     let lastTime = 0;
-    let names = ['KARAN', 'WEBGL2'];
+    let names = ['WEBGL2', 'KARAN'];
     let index = 0;
     function render(time) {
         if (!startTime) {
